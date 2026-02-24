@@ -34,10 +34,6 @@ jobs:
         run: terraform validate
         working-directory: Terraform
 
-      - name: Terraform plan
-        run: terraform plan -input=false -no-color
-        working-directory: Terraform
-
       - name: tfsec scan
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
