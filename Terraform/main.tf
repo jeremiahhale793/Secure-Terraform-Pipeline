@@ -127,3 +127,5 @@ resource "aws_iam_role_policy_attachment" "attach_over_permissive" {
   role       = aws_iam_role.test_role.name
   policy_arn = aws_iam_policy.over_permissive.arn
 }
+
+## Test comment for the PR Gating
