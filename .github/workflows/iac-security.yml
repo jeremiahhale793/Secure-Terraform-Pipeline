@@ -24,22 +24,22 @@ jobs:
 
       - name: Terraform fmt (check)
         run: terraform fmt -check -recursive
-        working-directory: terraform
+        working-directory: Terraform
 
       - name: Terraform init
         run: terraform init -input=false
-        working-directory: terraform
+        working-directory: Terraform
 
       - name: Terraform validate
         run: terraform validate
-        working-directory: terraform
+        working-directory: Terraform
 
       - name: Terraform plan
         run: terraform plan -input=false -no-color
-        working-directory: terraform
+        working-directory: Terraform
 
       - name: tfsec scan
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
           soft_fail: false
-          working-directory: terraform
+          working-directory: Terraform
