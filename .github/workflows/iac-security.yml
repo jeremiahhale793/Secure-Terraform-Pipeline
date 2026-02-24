@@ -34,8 +34,9 @@ jobs:
         run: terraform validate
         working-directory: Terraform
 
-      - name: tfsec scan
-        uses: aquasecurity/tfsec-action@v1.0.3
-        with:
-          soft_fail: false
-          working-directory: Terraform
+      - name: Install tfsec
+        run: |
+          curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+      - name: Run tfsec
+        run: tfsec Terraform
