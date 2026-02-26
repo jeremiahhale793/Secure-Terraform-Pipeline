@@ -27,36 +27,28 @@ resource "random_id" "suffix" {
   byte_length = 3
 }
 
+# -------------------------
+# Network piece (Security Group)
+# -------------------------
 data "aws_vpc" "default" {
   default = true
 }
 
-# -------------------------
-# KMS key for S3 encryption
-# -------------------------
-resource "aws_kms_key" "s3_key" {
-  description             = "KMS key for S3 bucket encryption"
-  deletion_window_in_days = 7
-  enable_key_rotation     = true
-  tags                    = local.common_tags
-}
-
-# -------------------------
-# Security Group (restricted, non-public)
-# -------------------------
 resource "aws_security_group" "app_sg" {
   name        = "${var.project_name}-app-sg"
-  description = "Security group with restricted ingress and egress"
+  description = "Security group with restricted ingress"
   vpc_id      = data.aws_vpc.default.id
 
+  # Restrict SSH to a single trusted IP (your public IP /32) via tfvars.
   ingress {
-    description = "SSH restricted to internal VPC only"
+    description = "SSH restricted to trusted IP"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.default.cidr_block]
+    cidr_blocks = [var.allowed_ip_for_ssh]
   }
 
+  # Allow all outbound traffic (common default)
   egress {
     description = "Egress restricted to internal VPC only"
     from_port   = 0
@@ -69,7 +61,7 @@ resource "aws_security_group" "app_sg" {
 }
 
 # -------------------------
-# S3 Buckets (data + access logs)
+# S3 piece (Bucket + security controls)
 # -------------------------
 resource "aws_s3_bucket" "log_bucket" {
   bucket = lower("${var.project_name}-logs-${random_id.suffix.hex}")
@@ -118,16 +110,21 @@ resource "aws_s3_bucket_public_access_block" "data_bucket_pab" {
   restrict_public_buckets = true
 }
 
+
+
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "data_bucket_sse" {
   bucket = aws_s3_bucket.data_bucket.id
 
   rule {
     apply_server_side_encryption_by_default {
+
       sse_algorithm     = "aws:kms"
       kms_master_key_id = aws_kms_key.s3_key.arn
     }
   }
 }
+
 
 resource "aws_s3_bucket_versioning" "data_bucket_versioning" {
   bucket = aws_s3_bucket.data_bucket.id
@@ -135,6 +132,7 @@ resource "aws_s3_bucket_versioning" "data_bucket_versioning" {
   versioning_configuration {
     status = "Enabled"
   }
+
 }
 
 # Enable S3 server access logging on the data bucket
@@ -146,6 +144,7 @@ resource "aws_s3_bucket_logging" "data_bucket_logging" {
 
 # -------------------------
 # IAM (least privilege demo)
+
 # -------------------------
 resource "aws_iam_role" "test_role" {
   name = "${var.project_name}-test-role"
@@ -166,10 +165,13 @@ resource "aws_iam_role" "test_role" {
   tags = local.common_tags
 }
 
+
 # Scope GetObject to a specific key to avoid wildcard object access finding
 resource "aws_iam_policy" "s3_read_only_bucket" {
   name        = "${var.project_name}-s3-readonly"
   description = "Read-only access scoped tightly to the project S3 bucket"
+
+
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -181,10 +183,12 @@ resource "aws_iam_policy" "s3_read_only_bucket" {
         Resource = aws_s3_bucket.data_bucket.arn
       },
       {
+
         Sid      = "ReadSpecificObject"
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
         Resource = "${aws_s3_bucket.data_bucket.arn}/allowed.txt"
+
       }
     ]
   })
