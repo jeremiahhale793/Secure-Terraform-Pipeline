@@ -17,59 +17,28 @@ provider "aws" {
   region = var.region
 }
 
-locals {
-  common_tags = merge(var.tags, {
-    NamePrefix = var.project_name
-  })
-}
-
 resource "random_id" "suffix" {
   byte_length = 3
 }
 
 # -------------------------
-# Network piece (Security Group)
+# KMS key (customer-managed encryption)
 # -------------------------
-data "aws_vpc" "default" {
-  default = true
-}
-
-resource "aws_security_group" "app_sg" {
-  name        = "${var.project_name}-app-sg"
-  description = "Security group with restricted ingress"
-  vpc_id      = data.aws_vpc.default.id
-
-  # Restrict SSH to a single trusted IP (your public IP /32) via tfvars.
-  ingress {
-    description = "SSH restricted to trusted IP"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_ip_for_ssh]
-  }
-
-  # Allow all outbound traffic (common default)
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = local.common_tags
+resource "aws_kms_key" "bucket_key" {
+  description             = "KMS key for S3 encryption"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
 }
 
 # -------------------------
-# S3 piece (Bucket + security controls)
+# Log bucket (for access logging)
 # -------------------------
-resource "aws_s3_bucket" "data_bucket" {
-  bucket = lower("${var.project_name}-${random_id.suffix.hex}")
-  tags   = local.common_tags
+resource "aws_s3_bucket" "log_bucket" {
+  bucket = "secure-demo-logs-${random_id.suffix.hex}"
 }
 
-# Block all public access at the bucket level
-resource "aws_s3_bucket_public_access_block" "data_bucket_pab" {
-  bucket = aws_s3_bucket.data_bucket.id
+resource "aws_s3_bucket_public_access_block" "log_bucket_block" {
+  bucket = aws_s3_bucket.log_bucket.id
 
   block_public_acls       = true
   ignore_public_acls      = true
@@ -77,75 +46,69 @@ resource "aws_s3_bucket_public_access_block" "data_bucket_pab" {
   restrict_public_buckets = true
 }
 
-# Enable default encryption at rest
-resource "aws_s3_bucket_server_side_encryption_configuration" "data_bucket_sse" {
-  bucket = aws_s3_bucket.data_bucket.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "log_bucket_encryption" {
+  bucket = aws_s3_bucket.log_bucket.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.bucket_key.arn
     }
   }
 }
 
-# Enable versioning (good governance baseline)
-resource "aws_s3_bucket_versioning" "data_bucket_versioning" {
-  bucket = aws_s3_bucket.data_bucket.id
+# -------------------------
+# Main secure bucket
+# -------------------------
+resource "aws_s3_bucket" "secure_bucket" {
+  bucket = "secure-demo-${random_id.suffix.hex}"
+}
+
+resource "aws_s3_bucket_public_access_block" "secure_bucket_block" {
+  bucket = aws_s3_bucket.secure_bucket.id
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "secure_bucket_encryption" {
+  bucket = aws_s3_bucket.secure_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.bucket_key.arn
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "secure_bucket_versioning" {
+  bucket = aws_s3_bucket.secure_bucket.id
 
   versioning_configuration {
     status = "Enabled"
   }
 }
 
-# -------------------------
-# IAM piece (Least privilege example policy)
-# -------------------------
-resource "aws_iam_role" "test_role" {
-  name = "${var.project_name}-test-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = local.common_tags
+# Enable logging on main bucket
+resource "aws_s3_bucket_logging" "secure_bucket_logging" {
+  bucket        = aws_s3_bucket.secure_bucket.id
+  target_bucket = aws_s3_bucket.log_bucket.id
+  target_prefix = "access-logs/"
 }
 
-# Least privilege: allow read-only access to ONLY this bucket
-resource "aws_iam_policy" "s3_read_only_bucket" {
-  name        = "${var.project_name}-s3-readonly"
-  description = "Read-only access scoped to the project S3 bucket"
+resource "aws_s3_bucket_versioning" "log_bucket_versioning" {
+  bucket = aws_s3_bucket.log_bucket.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ListBucket"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
-        Resource = aws_s3_bucket.data_bucket.arn
-      },
-      {
-        Sid      = "ReadObjects"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = "${aws_s3_bucket.data_bucket.arn}/*"
-      }
-    ]
-  })
-
-  tags = local.common_tags
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
-resource "aws_iam_role_policy_attachment" "attach_s3_read_only" {
-  role       = aws_iam_role.test_role.name
-  policy_arn = aws_iam_policy.s3_read_only_bucket.arn
+resource "aws_s3_bucket_logging" "log_bucket_logging" {
+  bucket        = aws_s3_bucket.log_bucket.id
+  target_bucket = aws_s3_bucket.log_bucket.id
+  target_prefix = "log-bucket-access/"
 }
